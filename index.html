@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Dashboard meteorológico - Mar del Plata / Miramar</title>
+  <style>
+    :root{
+      --bg:#0f1116;
+      --card:#1e212a;
+      --muted:#9aa3b2;
+      --accent:#6ea8ff;
+      --glass: rgba(255,255,255,0.03);
+    }
+    html,body{height:100%;margin:0;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial;}
+    body{background:var(--bg);color:#eef2f7;padding:18px;box-sizing:border-box;}
+    header{max-width:1200px;margin:0 auto 18px;display:flex;align-items:center;justify-content:space-between;gap:12px}
+    header h1{font-size:1.1rem;margin:0;color:var(--accent)}
+    .container{max-width:1200px;margin:0 auto;display:grid;grid-template-columns:repeat(12,1fr);gap:16px}
+    /* grid layout: cards */
+    .card{background:var(--card);border-radius:12px;padding:14px;box-shadow:0 6px 20px rgba(0,0,0,0.4);backdrop-filter:blur(4px)}
+    .wide{grid-column:span 12}
+    @media(min-width:720px){ .wide{grid-column:span 8} .side{grid-column:span 4} }
+    .city-grid{display:grid;grid-template-columns:repeat(1,1fr);gap:12px}
+    @media(min-width:720px){ .city-grid{grid-template-columns:repeat(2,1fr)} }
+    .city-card{display:flex;align-items:center;gap:12px;padding:10px;border-radius:10px;background:var(--glass)}
+    .city-left{flex:1}
+    .city-temp{font-size:2rem;font-weight:600}
+    .city-desc{text-transform:capitalize;color:var(--muted)}
+    .city-meta{font-size:0.85rem;color:var(--muted);margin-top:6px}
+    .icon{width:84px;height:84px;flex-shrink:0}
+    .controls{display:flex;gap:8px;align-items:center}
+    select,input{background:transparent;border:1px solid rgba(255,255,255,0.06);color:#fff;padding:8px 10px;border-radius:8px}
+    button{background:var(--accent);border:none;color:#042039;padding:8px 10px;border-radius:8px;cursor:pointer;font-weight:600}
+    .map-wrap, .radar-wrap{height:320px;overflow:hidden}
+    iframe{width:100%;height:100%;border:0;border-radius:8px}
+    img.radar{width:100%;height:100%;object-fit:cover;border-radius:8px;display:block}
+    .small{font-size:0.9rem;color:var(--muted)}
+    footer{max-width:1200px;margin:18px auto 0;color:var(--muted);font-size:0.85rem;text-align:center}
+    .loading{opacity:0.6}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Panel meteorológico — Mar del Plata / Miramar</h1>
+    <div class="controls">
+      <label class="small" for="extraCity">Elegir ciudad cercana:</label>
+      <select id="extraCity"></select>
+      <button id="btnRefresh">Actualizar</button>
+    </div>
+  </header>
+
+  <main class="container">
+    <!-- Left: principales ciudades -->
+    <section class="card wide">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <div>
+          <strong>Ciudades</strong>
+          <div class="small">Datos en tiempo real (OpenWeatherMap). Íconos y descripción cambian según el clima.</div>
+        </div>
+        <div class="small">Última actualización: <span id="lastUpdate">--:--</span></div>
+      </div>
+
+      <div class="city-grid" id="citiesGrid">
+        <!-- city cards inserted here -->
+      </div>
+    </section>
+
+    <!-- Right: mapa + radar -->
+    <aside class="card side">
+      <div style="margin-bottom:12px;display:flex;justify-content:space-between;align-items:center">
+        <strong>Mapa Windy</strong>
+        <div class="small">Centrado en la ciudad seleccionada</div>
+      </div>
+      <div id="windyWrap" class="map-wrap card" style="padding:0;background:transparent">
+        <iframe id="windyFrame"
+          src="https://embed.windy.com/embed2.html?lat=-38.0&lon=-57.6&zoom=7&level=surface&overlay=wind&menu=&message=&marker=true"
+          allowfullscreen>
+        </iframe>
+      </div>
+
+      <div style="height:12px"></div>
+
+      <div style="margin-bottom:8px;display:flex;justify-content:space-between;align-items:center">
+        <strong>Radar SMN</strong>
+        <div class="small">Imagen actualizada automáticamente</div>
+      </div>
+      <div class="radar-wrap card" style="padding:0;background:transparent">
+        <img id="radarImg" class="radar" src="https://www.smn.gob.ar/sites/default/files/radar_maxz_esa.jpg" alt="Radar SMN">
+      </div>
+    </aside>
+  </main>
+
+  <footer>Reemplazá la variable <code>API_KEY</code> en el script por tu clave de OpenWeatherMap. Coordenadas editables en el array <code>cities</code>.</footer>
+
+  <script>
+    /**
+     * CONFIG:
+     * - Reemplazá 'YOUR_API_KEY_HERE' por tu clave de OpenWeatherMap.
+     * - Editá / agregá ciudades en el array `cities`. Cada ciudad debe tener {id,name,lat,lon}.
+     *   Si preferís usar el nombre en vez del id, la consulta usa 'q=name,AR'.
+     */
+    const API_KEY = "YOUR_API_KEY_HERE"; // <-- PONÉ TU API KEY AQUÍ
+
+    // Ciudades iniciales. Editá coords si querés mayor precisión.
+    const cities = [
+      { id: "mar_del_plata", name: "Mar del Plata", lat: -38.0055, lon: -57.5426 },
+      { id: "miramar", name: "Miramar", lat: -38.0060, lon: -57.8750 },
+      // Ciudades cercanas para selector (pueden editarse/ampliarse)
+      { id: "necochea", name: "Necochea", lat: -38.5667, lon: -58.7667 },
+      { id: "pinamar", name: "Pinamar", lat: -37.1019, lon: -56.8528 },
+      { id: "balcarce", name: "Balcarce", lat: -37.8578, lon: -58.2553 }
+    ];
+
+    // Ciudades mostradas por defecto (primeras dos)
+    const visibleCities = [cities[0], cities[1]];
+
+    // DOM refs
+    const citiesGrid = document.getElementById("citiesGrid");
+    const extraCitySelect = document.getElementById("extraCity");
+    const btnRefresh = document.getElementById("btnRefresh");
+    const lastUpdate = document.getElementById("lastUpdate");
+    const radarImg = document.getElementById("radarImg");
+    const windyFrame = document.getElementById("windyFrame");
+
+    // Poblamos selector con las ciudades "cercanas" (skip las dos visibles)
+    function populateSelector() {
+      extraCitySelect.innerHTML = "";
+      // start from index 2
+      for (let i = 2; i < cities.length; i++) {
+        const opt = document.createElement("option");
+        opt.value = i;
+        opt.textContent = cities[i].name;
+        extraCitySelect.appendChild(opt);
+      }
+    }
+
+    // Crea las tarjetas para ciudades visibles y para la seleccionada
+    function renderCityCards() {
+      citiesGrid.innerHTML = "";
+      visibleCities.forEach(c => {
+        const el = document.createElement("div");
+        el.className = "city-card";
+        el.id = `card-${c.id}`;
+        el.innerHTML = `
+          <div class="icon">
+            <img id="icon-${c.id}" src="" alt="icon" style="width:100%;height:100%;object-fit:contain">
+          </div>
+          <div class="city-left">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <div>
+                <div style="font-weight:700">${c.name}</div>
+                <div class="city-desc" id="desc-${c.id}">Cargando...</div>
+              </div>
+              <div style="text-align:right">
+                <div class="city-temp" id="temp-${c.id}">--°C</div>
+                <div class="city-meta" id="meta-${c.id}"></div>
+              </div>
+            </div>
+          </div>
+        `;
+        citiesGrid.appendChild(el);
+      });
+
+      // add a placeholder card for the selected extra city
+      const selIndex = extraCitySelect.value ? parseInt(extraCitySelect.value) : 2;
+      const selCity = cities[selIndex];
+      const elSel = document.createElement("div");
+      elSel.className = "city-card";
+      elSel.id = `card-${selCity.id}`;
+      elSel.innerHTML = `
+        <div class="icon">
+          <img id="icon-${selCity.id}" src="" alt="icon" style="width:100%;height:100%;object-fit:contain">
+        </div>
+        <div class="city-left">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <div>
+              <div style="font-weight:700">${selCity.name}</div>
+              <div class="city-desc" id="desc-${selCity.id}">Cargando...</div>
+            </div>
+            <div style="text-align:right">
+              <div class="city-temp" id="temp-${selCity.id}">--°C</div>
+              <div class="city-meta" id="meta-${selCity.id}"></div>
+            </div>
+          </div>
+        </div>
+      `;
+      citiesGrid.appendChild(elSel);
+    }
+
+    // Helper: fetch clima por coordenadas (usa /weather y /forecast)
+    async function fetchWeatherByCoords(lat, lon) {
+      // endpoint actual
+      const urlNow = `https://api.openweathermap.org/data/2.5/weather?lat=${lat}&lon=${lon}&units=metric&lang=es&appid=${API_KEY}`;
+      const urlForecast = `https://api.openweathermap.org/data/2.5/forecast?lat=${lat}&lon=${lon}&units=metric&lang=es&appid=${API_KEY}`;
+      const [rNow, rForecast] = await Promise.all([fetch(urlNow), fetch(urlForecast)]);
+      if (!rNow.ok) throw new Error("Error en consulta current");
+      if (!rForecast.ok) throw new Error("Error en consulta forecast");
+      const dNow = await rNow.json();
+      const dForecast = await rForecast.json();
+      return { now: dNow, forecast: dForecast };
+    }
+
+    // Update UI for a city object
+    function updateCityUI(city, data) {
+      const id = city.id;
+      const now = data.now;
+      // icon from OpenWeatherMap (works reliably)
+      const iconCode = now.weather && now.weather[0] ? now.weather[0].icon : null;
+      const iconUrl = iconCode ? `https://openweathermap.org/img/wn/${iconCode}@4x.png` : "";
+      const desc = now.weather && now.weather[0] ? now.weather[0].description : "--";
+      const temp = now.main ? now.main.temp.toFixed(1)+"°C" : "--°C";
+      const meta = `Viento ${now.wind ? now.wind.speed + " m/s" : "--"} · Hum ${now.main ? now.main.humidity + "%" : "--"}`;
+
+      const iconEl = document.getElementById(`icon-${id}`);
+      const descEl = document.getElementById(`desc-${id}`);
+      const tempEl = document.getElementById(`temp-${id}`);
+      const metaEl = document.getElementById(`meta-${id}`);
+
+      if(iconEl) iconEl.src = iconUrl;
+      if(descEl) descEl.textContent = desc;
+      if(tempEl) tempEl.textContent = temp;
+      if(metaEl) metaEl.textContent = meta;
+
+      // set card background tone based on weather (optional subtle effect)
+      const card = document.getElementById(`card-${id}`);
+      if (card) {
+        const main = now.weather && now.weather[0] ? now.weather[0].main.toLowerCase() : "";
+        card.style.background = (() => {
+          if (main.includes("clear")) return "linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01))";
+          if (main.includes("cloud")) return "linear-gradient(180deg, rgba(255,255,255,0.015), rgba(255,255,255,0.01))";
+          if (main.includes("rain") || main.includes("drizzle")) return "linear-gradient(180deg, rgba(0,0,0,0.05), rgba(0,0,0,0.02))";
+          if (main.includes("thunder")) return "linear-gradient(180deg, rgba(10,0,30,0.06), rgba(0,0,0,0.02))";
+          return "var(--glass)";
+        })();
+      }
+    }
+
+    // Updates Windy iframe center and adds marker
+    function updateWindyCenter(lat, lon, zoom = 7) {
+      // Windy embed URL with lat/lon and zoom
+      const base = "https://embed.windy.com/embed2.html";
+      const params = `?lat=${lat}&lon=${lon}&zoom=${zoom}&level=surface&overlay=wind&menu=&message=&marker=true`;
+      windyFrame.src = base + params;
+    }
+
+    // Load radar image (SMN) and append timestamp to bust cache
+    function refreshRadar() {
+      const url = "https://www.smn.gob.ar/sites/default/files/radar_maxz_esa.jpg";
+      radarImg.src = url + "?t=" + Date.now();
+    }
+
+    // Core: consulta todas las ciudades visibles + la seleccionada
+    async function updateAll() {
+      lastUpdate.textContent = new Date().toLocaleTimeString();
+      // ensure cards present
+      renderCityCards();
+
+      const selIndex = extraCitySelect.value ? parseInt(extraCitySelect.value) : 2;
+      const selCity = cities[selIndex];
+
+      // build array of all target cities
+      const targets = [...visibleCities, selCity];
+
+      // fetch in parallel
+      const promises = targets.map(c => {
+        return fetchWeatherByCoords(c.lat, c.lon)
+          .then(data => ({ city: c, data }))
+          .catch(err => ({ city: c, err }));
+      });
+
+      const results = await Promise.all(promises);
+
+      results.forEach(res => {
+        if (res.err) {
+          const id = res.city.id;
+          const descEl = document.getElementById(`desc-${id}`);
+          if (descEl) descEl.textContent = "Error al cargar";
+          console.error("Error ciudad", res.city.name, res.err);
+        } else {
+          updateCityUI(res.city, res.data);
+        }
+      });
+
+      // Update Windy to center on selected city
+      updateWindyCenter(selCity.lat, selCity.lon, 7);
+
+      // refresh radar
+      refreshRadar();
+
+      // update timestamp
+      lastUpdate.textContent = new Date().toLocaleString();
+    }
+
+    // Init
+    (function init(){
+      populateSelector();
+      // default selected index in selector
+      extraCitySelect.value = 2;
+      renderCityCards();
+      // attach events
+      btnRefresh.addEventListener("click", () => updateAll());
+      extraCitySelect.addEventListener("change", () => updateAll());
+      // first load
+      updateAll();
+      // auto-refresh every 10 min for weather and 5 min for radar
+      setInterval(updateAll, 10 * 60 * 1000);
+      setInterval(refreshRadar, 5 * 60 * 1000);
+    })();
+
+    // Nota: si abrís el archivo con file:// puede que el fetch falle por CORS o por política del navegador.
+    // Usá un servidor local: `python3 -m http.server` o Live Server en VSCode.
+  </script>
+</body>
+</html>
